@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WikiGraph — Interactive Wikipedia Explorer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --c0: #00ffcc;
+    --c1: #00aaff;
+    --c2: #aa55ff;
+    --c3: #ff5599;
+    --c4: #ff9900;
+    --bg: #04050a;
+    --panel: rgba(4,6,18,0.94);
+    --mono: 'IBM Plex Mono', monospace;
+    --serif: 'DM Serif Display', serif;
+  }
+
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: var(--bg); color: #e0f0ff;
+    font-family: var(--mono);
+  }
+
+  #topbar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 20px;
+    background: rgba(2,3,8,0.9);
+    border-bottom: 1px solid rgba(0,255,180,0.08);
+    backdrop-filter: blur(14px);
+  }
+
+  #logo {
+    font-family: var(--serif);
+    font-size: 18px; color: var(--c0);
+    white-space: nowrap; flex-shrink: 0;
+  }
+  #logo span { color: #fff; }
+
+  #search-form {
+    display: flex; gap: 8px; flex: 1; max-width: 400px;
+  }
+
+  #search-input {
+    flex: 1; background: rgba(0,255,180,0.05);
+    border: 1px solid rgba(0,255,180,0.2); border-radius: 8px;
+    padding: 7px 13px; color: #a0ffdd;
+    font-family: var(--mono); font-size: 13px; outline: none;
+    transition: border-color 0.2s;
+  }
+  #search-input:focus { border-color: rgba(0,255,180,0.45); }
+
+  #search-btn {
+    background: rgba(0,255,180,0.1); border: 1px solid rgba(0,255,180,0.25);
+    border-radius: 8px; padding: 7px 16px; color: var(--c0);
+    font-family: var(--mono); font-size: 13px; cursor: pointer;
+    transition: background 0.15s;
+  }
+  #search-btn:hover { background: rgba(0,255,180,0.18); }
+
+  #stats {
+    margin-left: auto; font-size: 12px;
+    color: rgba(255,255,255,0.22); white-space: nowrap;
+  }
+
+  #status-msg {
+    font-size: 12px; color: #ffd700;
+    animation: shimmer 1s ease-in-out infinite;
+    min-width: 120px;
+  }
+
+  #status-msg.error { color: #ff6060; animation: none; }
+  #status-msg.hidden { visibility: hidden; }
+
+  #svg-container {
+    position: fixed; top: 46px; left: 0; right: 0; bottom: 0;
+    transition: top 0.18s;
+  }
+
+  svg { width: 100%; height: 100%; cursor: grab; }
+  svg:active { cursor: grabbing; }
+
+  .node { cursor: pointer; }
+  .node circle.bg { transition: r 0.2s; }
+  .node:hover circle.bg { filter: brightness(1.4); }
+  .node text { pointer-events: none; font-family: var(--mono); }
+
+  .link { stroke-opacity: 0.18; }
+
+  /* Legend */
+  #legend {
+    position: fixed; bottom: 20px; left: 20px; z-index: 50;
+    background: var(--panel); border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 12px; padding: 12px 16px;
+    backdrop-filter: blur(10px);
+  }
+  .legend-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+  .legend-row:last-child { margin-bottom: 0; }
+  .legend-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .legend-label { font-size: 11px; color: rgba(255,255,255,0.35); }
+
+  /* Hints */
+  #hints {
+    position: fixed; bottom: 20px; right: 20px; z-index: 50;
+    font-size: 11px; color: rgba(255,255,255,0.18); line-height: 1.9;
+    text-align: right;
+  }
+
+  /* Info panel */
+  #info-panel {
+    position: fixed; top: 66px; right: 16px; width: 270px; z-index: 80;
+    background: var(--panel); border: 1px solid rgba(0,255,180,0.13);
+    border-radius: 14px; padding: 16px;
+    backdrop-filter: blur(16px);
+    transition: opacity 0.2s, transform 0.2s;
+    opacity: 0; pointer-events: none;
+    transform: translateY(-4px);
+  }
+  #info-panel.visible { opacity: 1; pointer-events: auto; transform: none; }
+  #info-title { font-family: var(--serif); font-size: 15px; line-height: 1.3; margin-bottom: 8px; }
+  #info-thumb { width: 100%; height: 88px; object-fit: cover; border-radius: 8px; margin-bottom: 10px; display: none; }
+  #info-extract { font-size: 11px; color: rgba(200,220,255,0.55); line-height: 1.75; margin-bottom: 10px; min-height: 40px; }
+  #info-footer { display: flex; justify-content: space-between; align-items: center; }
+  #info-link { font-size: 11px; color: var(--c0); text-decoration: none; opacity: 0.65; }
+  #info-link:hover { opacity: 1; }
+  #info-hint { font-size: 11px; color: rgba(255,255,255,0.18); }
+
+  @keyframes shimmer { 0%,100%{opacity:0.5} 50%{opacity:1} }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pulse-ring { 0% { r: 30; opacity: 0.5; } 100% { r: 56; opacity: 0; } }
+  @keyframes slide-down { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:none; } }
+
+  #reset-btn {
+    background: rgba(255,80,80,0.08); border: 1px solid rgba(255,80,80,0.2);
+    border-radius: 8px; padding: 7px 14px; color: #ff6060;
+    font-family: var(--mono); font-size: 13px; cursor: pointer;
+    transition: background 0.15s; white-space: nowrap; flex-shrink: 0;
+  }
+  #reset-btn:hover { background: rgba(255,80,80,0.18); }
+
+  #settings-btn {
+    background: rgba(160,160,255,0.07); border: 1px solid rgba(160,160,255,0.18);
+    border-radius: 8px; padding: 7px 13px; color: #a0a8ff;
+    font-family: var(--mono); font-size: 13px; cursor: pointer;
+    transition: background 0.15s; flex-shrink: 0;
+  }
+  #settings-btn:hover, #settings-btn.active { background: rgba(160,160,255,0.18); color: #c0c8ff; }
+
+  #fps-badge {
+    font-size: 11px; color: #00ffcc; background: rgba(0,255,180,0.07);
+    border: 1px solid rgba(0,255,180,0.15); border-radius: 6px;
+    padding: 3px 9px; white-space: nowrap; display: none;
+    font-family: var(--mono); flex-shrink: 0;
+  }
+  #fps-badge.visible { display: block; }
+
+  /* Settings panel */
+  #settings-panel {
+    position: fixed; top: 46px; left: 0; right: 0; z-index: 90;
+    background: rgba(3,4,12,0.97); border-bottom: 1px solid rgba(160,160,255,0.12);
+    backdrop-filter: blur(18px); padding: 18px 24px 20px;
+    display: none;
+    animation: slide-down 0.18s ease;
+  }
+  #settings-panel.open { display: block; }
+
+  .settings-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 20px 32px; max-width: 860px;
+  }
+
+  .setting-row { display: flex; flex-direction: column; gap: 8px; }
+  .setting-label {
+    font-size: 11px; color: rgba(200,210,255,0.45);
+    text-transform: uppercase; letter-spacing: 1.5px; display: flex;
+    justify-content: space-between; align-items: center;
+  }
+  .setting-value {
+    font-size: 13px; color: #a0a8ff; font-weight: 600;
+  }
+
+  input[type=range] {
+    -webkit-appearance: none; width: 100%; height: 4px;
+    background: rgba(160,160,255,0.15); border-radius: 4px; outline: none; cursor: pointer;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
+    background: #a0a8ff; box-shadow: 0 0 8px rgba(160,160,255,0.5); cursor: pointer;
+  }
+  input[type=range]::-moz-range-thumb {
+    width: 14px; height: 14px; border-radius: 50%; border: none;
+    background: #a0a8ff; box-shadow: 0 0 8px rgba(160,160,255,0.5); cursor: pointer;
+  }
+
+  .toggle-row { display: flex; align-items: center; gap: 12px; }
+  .toggle {
+    position: relative; width: 38px; height: 20px; cursor: pointer;
+  }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle-track {
+    position: absolute; inset: 0; background: rgba(255,255,255,0.1);
+    border-radius: 20px; border: 1px solid rgba(255,255,255,0.12);
+    transition: background 0.2s;
+  }
+  .toggle input:checked + .toggle-track { background: rgba(0,255,180,0.3); border-color: rgba(0,255,180,0.4); }
+  .toggle-thumb {
+    position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
+    background: rgba(255,255,255,0.4); border-radius: 50%;
+    transition: transform 0.2s, background 0.2s;
+  }
+  .toggle input:checked ~ .toggle-thumb { transform: translateX(18px); background: #00ffcc; }
+  .toggle-lbl { font-size: 12px; color: rgba(200,210,255,0.5); }
+
+  .settings-note {
+    margin-top: 14px; font-size: 11px; color: rgba(255,255,255,0.18); line-height: 1.7;
+    border-top: 1px solid rgba(255,255,255,0.05); padding-top: 12px;
+  }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <div id="logo">Wiki<span>Graph</span></div>
+  <form id="search-form">
+    <input id="search-input" type="text" value="Black hole" placeholder="Search Wikipedia…" autocomplete="off" />
+    <button id="search-btn" type="submit">→ Go</button>
+  </form>
+  <span id="status-msg" class="hidden">loading…</span>
+  <div id="fps-badge">– fps</div>
+  <div id="stats">0 nodes</div>
+  <button id="reset-btn" title="Reset graph">⟳ Reset</button>
+  <button id="settings-btn" title="Settings">⚙ Settings</button>
+</div>
+
+<!-- Settings Panel -->
+<div id="settings-panel">
+  <div class="settings-grid">
+    <div class="setting-row">
+      <div class="setting-label">
+        Max Depth (steps from root)
+        <span class="setting-value" id="depth-val">5</span>
+      </div>
+      <input type="range" id="depth-slider" min="1" max="8" value="5" step="1">
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:rgba(255,255,255,0.18);margin-top:2px">
+        <span>1 step</span><span>shallow ←————→ deep</span><span>8 steps</span>
+      </div>
+    </div>
+    <div class="setting-row">
+      <div class="setting-label">
+        Links per node (on expand)
+        <span class="setting-value" id="links-val">13</span>
+      </div>
+      <input type="range" id="links-slider" min="3" max="30" value="13" step="1">
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:rgba(255,255,255,0.18);margin-top:2px">
+        <span>3</span><span>fewer ←————→ more</span><span>30</span>
+      </div>
+    </div>
+    <div class="setting-row">
+      <div class="setting-label">Show FPS counter</div>
+      <div class="toggle-row">
+        <label class="toggle">
+          <input type="checkbox" id="fps-toggle">
+          <div class="toggle-track"></div>
+          <div class="toggle-thumb"></div>
+        </label>
+        <span class="toggle-lbl">Display live frames-per-second in the toolbar</span>
+      </div>
+    </div>
+    <div class="setting-row">
+      <div class="setting-label">Glow effects</div>
+      <div class="toggle-row">
+        <label class="toggle">
+          <input type="checkbox" id="glow-toggle" checked>
+          <div class="toggle-track"></div>
+          <div class="toggle-thumb"></div>
+        </label>
+        <span class="toggle-lbl">Node glow filter (disable for better perf with many nodes)</span>
+      </div>
+    </div>
+  </div>
+  <div class="settings-note">
+    ⚡ <b>Max depth</b> controls how many hops from the root article you can expand — nodes at the limit show no + button. &nbsp;·&nbsp;
+    🔗 <b>Links per node</b> caps child nodes per expansion. &nbsp;·&nbsp;
+    🖥 Healthy FPS is 55–60; drops mean too many nodes on screen.
+  </div>
+</div>
+
+<div id="svg-container">
+  <svg id="graph-svg">
+    <defs>
+      <radialGradient id="g0" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#00ffcc" stop-opacity="1"/>
+        <stop offset="100%" stop-color="#00ffcc" stop-opacity="0.1"/>
+      </radialGradient>
+      <radialGradient id="g1" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#00aaff" stop-opacity="1"/>
+        <stop offset="100%" stop-color="#00aaff" stop-opacity="0.1"/>
+      </radialGradient>
+      <radialGradient id="g2" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#aa55ff" stop-opacity="1"/>
+        <stop offset="100%" stop-color="#aa55ff" stop-opacity="0.1"/>
+      </radialGradient>
+      <radialGradient id="g3" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#ff5599" stop-opacity="1"/>
+        <stop offset="100%" stop-color="#ff5599" stop-opacity="0.1"/>
+      </radialGradient>
+      <radialGradient id="g4" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#ff9900" stop-opacity="1"/>
+        <stop offset="100%" stop-color="#ff9900" stop-opacity="0.1"/>
+      </radialGradient>
+      <filter id="glow-filter" x="-40%" y="-40%" width="180%" height="180%">
+        <feGaussianBlur stdDeviation="3" result="blur"/>
+        <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+    <g id="zoom-group">
+      <g id="links-g"></g>
+      <g id="nodes-g"></g>
+    </g>
+  </svg>
+</div>
+
+<div id="legend">
+  <div class="legend-row"><div class="legend-dot" style="background:#00ffcc;box-shadow:0 0 5px #00ffcc"></div><span class="legend-label">Root article</span></div>
+  <div class="legend-row"><div class="legend-dot" style="background:#00aaff;box-shadow:0 0 5px #00aaff"></div><span class="legend-label">Depth 1</span></div>
+  <div class="legend-row"><div class="legend-dot" style="background:#aa55ff;box-shadow:0 0 5px #aa55ff"></div><span class="legend-label">Depth 2</span></div>
+  <div class="legend-row"><div class="legend-dot" style="background:#ff5599;box-shadow:0 0 5px #ff5599"></div><span class="legend-label">Depth 3+</span></div>
+</div>
+
+<div id="hints">
+  click node → expand<br>
+  scroll → zoom · drag → pan<br>
+  hover → read summary
+</div>
+
+<div id="info-panel">
+  <div id="info-title">—</div>
+  <img id="info-thumb" alt="">
+  <div id="info-extract">Hover a node to read about it.</div>
+  <div id="info-footer">
+    <a id="info-link" href="#" target="_blank" rel="noreferrer">Open Wikipedia ↗</a>
+    <span id="info-hint"></span>
+  </div>
+</div>
+
+<script>
+const COLORS = ['#00ffcc','#00aaff','#aa55ff','#ff5599','#ff9900'];
+const color = (depth) => COLORS[Math.min(depth, 4)];
+const radius = (d) => (d.depth === 0 ? 22 : d.depth === 1 ? 15 : 10) + Math.min((d.linkCount||0)*0.7, 7);
+
+let nodes = [], links = [], nodeMap = {}, expandedSet = new Set();
+let busy = false;
+let currentRoot = 'Black hole';
+
+// --- Settings state ---
+let settings = { maxDepth: 5, linksPerNode: 13, showFps: false, glowEnabled: true };
+
+const svg = d3.select('#graph-svg');
+const zoomGroup = d3.select('#zoom-group');
+const linksG = d3.select('#links-g');
+const nodesG = d3.select('#nodes-g');
+const statsEl = document.getElementById('stats');
+const statusEl = document.getElementById('status-msg');
+const infoPanel = document.getElementById('info-panel');
+const fpsBadge = document.getElementById('fps-badge');
+
+// --- FPS tracking ---
+let fpsFrames = 0, fpsLast = performance.now(), fpsValue = 0;
+function fpsLoop() {
+  fpsFrames++;
+  const now = performance.now();
+  if (now - fpsLast >= 1000) {
+    fpsValue = Math.round(fpsFrames * 1000 / (now - fpsLast));
+    fpsFrames = 0; fpsLast = now;
+    if (settings.showFps) {
+      const col = fpsValue >= 50 ? '#00ffcc' : fpsValue >= 30 ? '#ffd700' : '#ff6060';
+      fpsBadge.textContent = `${fpsValue} fps`;
+      fpsBadge.style.color = col;
+      fpsBadge.style.borderColor = col.replace(')', ',0.3)').replace('rgb', 'rgba');
+    }
+  }
+  requestAnimationFrame(fpsLoop);
+}
+requestAnimationFrame(fpsLoop);
+
+function setStatus(msg, isError = false) {
+  if (!msg) {
+    statusEl.className = 'hidden';
+  } else {
+    statusEl.textContent = msg;
+    statusEl.className = isError ? 'error' : '';
+  }
+}
+
+// --- Simulation ---
+const sim = d3.forceSimulation()
+  .force('link', d3.forceLink().id(d => d.id).distance(d => 90 + (d.target.depth||0)*28).strength(0.55))
+  .force('charge', d3.forceManyBody().strength(d => d.depth === 0 ? -900 : -280))
+  .force('center', d3.forceCenter(window.innerWidth/2, (window.innerHeight-46)/2).strength(0.04))
+  .force('collide', d3.forceCollide().radius(d => radius(d)+18).strength(0.7))
+  .alphaDecay(0.018)
+  .velocityDecay(0.38)
+  .on('tick', ticked);
+
+// --- Zoom ---
+const zoom = d3.zoom()
+  .scaleExtent([0.1, 5])
+  .on('zoom', e => zoomGroup.attr('transform', e.transform));
+
+svg.call(zoom).on('dblclick.zoom', null);
+
+window.addEventListener('resize', () => {
+  sim.force('center', d3.forceCenter(window.innerWidth/2, (window.innerHeight-46)/2).strength(0.04));
+});
+
+// --- Fetch helpers ---
+async function fetchLinks(title) {
+  const url = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=links&pllimit=80&format=json&origin=*`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  const pages = data?.query?.pages;
+  if (!pages) return [];
+  const page = Object.values(pages)[0];
+  return (page?.links || [])
+    .map(l => l.title)
+    .filter(t => !t.includes(':'))
+    .slice(0, settings.linksPerNode);
+}
+
+async function fetchSummary(title) {
+  const url = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  if (!res.ok) return null;
+  return await res.json();
+}
+
+// --- Load root ---
+async function loadRoot(title) {
+  if (busy) return;
+  busy = true;
+  currentRoot = title;
+  setStatus('loading…');
+
+  // Reset
+  sim.stop();
+  nodes = []; links = []; nodeMap = {}; expandedSet.clear();
+  linksG.selectAll('*').remove();
+  nodesG.selectAll('*').remove();
+  hideInfo();
+
+  const cx = window.innerWidth / 2, cy = (window.innerHeight - 46) / 2;
+  const root = { id: title, title, depth: 0, x: cx, y: cy, fx: cx, fy: cy, linkCount: 0 };
+  nodes.push(root);
+  nodeMap[title] = root;
+  updateGraph();
+
+  try {
+    const linkTitles = await fetchLinks(title);
+    root.fx = null; root.fy = null;
+    root.linkCount = linkTitles.length;
+    expandedSet.add(title);
+
+    for (const lt of linkTitles) {
+      if (!nodeMap[lt]) {
+        const n = { id: lt, title: lt, depth: 1, linkCount: 0 };
+        nodes.push(n);
+        nodeMap[lt] = n;
+      }
+      links.push({ source: title, target: lt });
+    }
+
+    updateGraph();
+    setStatus('');
+  } catch(e) {
+    setStatus('Could not load — check connection', true);
+    console.error('loadRoot failed:', e);
+  } finally {
+    busy = false;
+  }
+}
+
+// --- Expand node ---
+async function expandNode(d) {
+  if (expandedSet.has(d.id) || busy) return;
+  if (d.depth >= settings.maxDepth) return; // depth limit
+  busy = true;
+  expandedSet.add(d.id);
+  setStatus(`fetching "${d.title.slice(0,25)}…"`);
+
+  try {
+    const linkTitles = await fetchLinks(d.title);
+    d.linkCount = linkTitles.length;
+
+    for (const lt of linkTitles) {
+      if (!nodeMap[lt]) {
+        const n = { id: lt, title: lt, depth: d.depth + 1, linkCount: 0 };
+        nodes.push(n);
+        nodeMap[lt] = n;
+        links.push({ source: d.id, target: lt });
+      } else {
+        const already = links.some(l =>
+          (l.source?.id || l.source) === d.id &&
+          (l.target?.id || l.target) === lt
+        );
+        if (!already) links.push({ source: d.id, target: lt });
+      }
+    }
+
+    updateGraph();
+    setStatus('');
+  } catch(e) {
+    expandedSet.delete(d.id);
+    setStatus('Failed to load links', true);
+    setTimeout(() => setStatus(''), 3000);
+    console.error('expandNode failed:', e);
+  } finally {
+    busy = false;
+  }
+}
+
+// --- Render ---
+function updateGraph() {
+  statsEl.textContent = `${nodes.length} nodes`;
+
+  // Links
+  const link = linksG.selectAll('line').data(links, d => `${d.source?.id||d.source}-${d.target?.id||d.target}`);
+  link.enter().append('line')
+    .attr('class', 'link')
+    .attr('stroke', d => {
+      const sNode = nodeMap[d.source?.id||d.source];
+      return sNode ? color(sNode.depth) : '#fff';
+    })
+    .attr('stroke-width', 1.3);
+  link.exit().remove();
+
+  // Nodes
+  const node = nodesG.selectAll('g.node').data(nodes, d => d.id);
+
+  const nodeEnter = node.enter().append('g')
+    .attr('class', 'node')
+    .on('click', (e, d) => { e.stopPropagation(); expandNode(d); })
+    .on('mouseenter', (e, d) => showInfo(d))
+    .on('mouseleave', () => {});
+
+  // Glow halo
+  nodeEnter.append('circle')
+    .attr('class', 'halo')
+    .attr('r', d => radius(d) + 12)
+    .attr('fill', d => color(d.depth))
+    .attr('opacity', 0.07);
+
+  // Pulse ring for root
+  nodeEnter.filter(d => d.depth === 0).append('circle')
+    .attr('class', 'pulse-ring')
+    .attr('r', d => radius(d) + 4)
+    .attr('fill', 'none')
+    .attr('stroke', d => color(d.depth))
+    .attr('stroke-width', 1.5)
+    .attr('opacity', 0.35);
+
+  // Main circle
+  nodeEnter.append('circle')
+    .attr('class', 'bg')
+    .attr('r', d => radius(d))
+    .attr('fill', d => `url(#g${Math.min(d.depth,4)})`)
+    .attr('stroke', d => color(d.depth))
+    .attr('stroke-width', 1.2);
+
+  // + indicator
+  nodeEnter.append('text')
+    .attr('class', 'plus-icon')
+    .attr('text-anchor', 'middle').attr('dy', '0.35em')
+    .attr('font-size', d => d.depth === 0 ? 14 : 11)
+    .attr('fill', '#fff').attr('fill-opacity', 0.45);
+
+  // Label
+  nodeEnter.append('text')
+    .attr('class', 'label')
+    .attr('text-anchor', 'middle')
+    .attr('fill', d => color(d.depth))
+    .attr('fill-opacity', 0.7)
+    .attr('font-size', d => d.depth === 0 ? 11 : 9);
+
+  node.exit().remove();
+
+  // Update all nodes (merged)
+  const merged = nodeEnter.merge(node);
+
+  merged.select('circle.halo').attr('r', d => radius(d) + 12);
+  merged.select('circle.bg')
+    .attr('r', d => radius(d))
+    .attr('filter', () => settings.glowEnabled ? 'url(#glow-filter)' : null);
+
+  merged.select('text.plus-icon')
+    .text(d => {
+      if (expandedSet.has(d.id)) return '';
+      if (d.depth >= settings.maxDepth) return '—';
+      return '+';
+    })
+    .attr('fill-opacity', d => d.depth >= settings.maxDepth && !expandedSet.has(d.id) ? 0.2 : 0.45);
+
+  merged.select('text.label')
+    .attr('dy', d => radius(d) + 14)
+    .text(d => d.title.length > 17 ? d.title.slice(0, 15) + '…' : d.title);
+
+  // Drag
+  merged.call(d3.drag()
+    .on('start', (e, d) => { if (!e.active) sim.alphaTarget(0.25).restart(); d.fx = d.x; d.fy = d.y; })
+    .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
+    .on('end', (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; })
+  );
+
+  // Restart sim
+  sim.nodes(nodes);
+  sim.force('link').links(links);
+  sim.alpha(0.45).restart();
+}
+
+function ticked() {
+  linksG.selectAll('line')
+    .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+    .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+
+  nodesG.selectAll('g.node')
+    .attr('transform', d => `translate(${d.x},${d.y})`);
+}
+
+// --- Info panel ---
+let currentHovered = null;
+
+async function showInfo(d) {
+  if (currentHovered === d.id) return;
+  currentHovered = d.id;
+
+  document.getElementById('info-title').textContent = d.title;
+  document.getElementById('info-title').style.color = color(d.depth);
+  document.getElementById('info-extract').textContent = 'Loading…';
+  document.getElementById('info-thumb').style.display = 'none';
+  document.getElementById('info-hint').textContent = expandedSet.has(d.id) ? 'expanded' : 'click to expand';
+  document.getElementById('info-link').href = `https://en.wikipedia.org/wiki/${encodeURIComponent(d.title)}`;
+  infoPanel.classList.add('visible');
+
+  if (d._summary) {
+    renderSummary(d._summary);
+    return;
+  }
+
+  try {
+    const s = await fetchSummary(d.title);
+    if (s) { d._summary = s; }
+    if (currentHovered === d.id) renderSummary(s);
+  } catch {
+    if (currentHovered === d.id) document.getElementById('info-extract').textContent = 'Could not load summary.';
+  }
+}
+
+function renderSummary(s) {
+  if (!s) { document.getElementById('info-extract').textContent = 'No summary available.'; return; }
+  const extract = s.extract || '';
+  document.getElementById('info-extract').textContent = extract.slice(0, 260) + (extract.length > 260 ? '…' : '');
+  const thumb = document.getElementById('info-thumb');
+  if (s.thumbnail?.source) {
+    thumb.src = s.thumbnail.source;
+    thumb.style.display = 'block';
+  } else {
+    thumb.style.display = 'none';
+  }
+}
+
+function hideInfo() {
+  infoPanel.classList.remove('visible');
+  currentHovered = null;
+}
+
+// --- Search ---
+document.getElementById('search-form').addEventListener('submit', e => {
+  e.preventDefault();
+  const val = document.getElementById('search-input').value.trim();
+  if (val) { currentRoot = val; loadRoot(val); }
+});
+
+// --- Reset ---
+document.getElementById('reset-btn').addEventListener('click', () => {
+  loadRoot(currentRoot);
+});
+
+// --- Settings toggle ---
+const settingsBtn = document.getElementById('settings-btn');
+const settingsPanel = document.getElementById('settings-panel');
+settingsBtn.addEventListener('click', () => {
+  const open = settingsPanel.classList.toggle('open');
+  settingsBtn.classList.toggle('active', open);
+});
+
+// --- Depth slider ---
+const depthSlider = document.getElementById('depth-slider');
+const depthVal = document.getElementById('depth-val');
+depthSlider.addEventListener('input', () => {
+  settings.maxDepth = parseInt(depthSlider.value);
+  depthVal.textContent = depthSlider.value;
+  updateGraph(); // refresh + icons
+});
+
+// --- Links per node slider ---
+const linksSlider = document.getElementById('links-slider');
+const linksVal = document.getElementById('links-val');
+linksSlider.addEventListener('input', () => {
+  settings.linksPerNode = parseInt(linksSlider.value);
+  linksVal.textContent = linksSlider.value;
+});
+
+// --- FPS toggle ---
+document.getElementById('fps-toggle').addEventListener('change', e => {
+  settings.showFps = e.target.checked;
+  fpsBadge.classList.toggle('visible', settings.showFps);
+  if (!settings.showFps) fpsBadge.textContent = '– fps';
+});
+
+// --- Glow toggle ---
+document.getElementById('glow-toggle').addEventListener('change', e => {
+  settings.glowEnabled = e.target.checked;
+  updateGraph();
+});
+
+// --- Boot ---
+loadRoot('Black hole');
+</script>
+</body>
+</html>
